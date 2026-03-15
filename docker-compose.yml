@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: hll-postgres
+    restart: unless-stopped
+    # IMPORTANT: These must match the [database] section in config.toml.
+    # If you change database credentials in config.toml, update them here too.
+    environment:
+      POSTGRES_USER: hll_user
+      POSTGRES_PASSWORD: hll_password
+      POSTGRES_DB: hll_radar
+    # Not exposed to host — only reachable by other containers on this network.
+    # Uncomment the next two lines if you need direct access for debugging:
+    # ports:
+    #   - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hll_user -d hll_radar"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  hll-radar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hll-radar
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.toml:/app/config.toml:ro
+      - ./logs:/app/logs
+    environment:
+      - TZ=UTC
+    # If CRCON auth is enabled and CRCON runs on the Docker host (e.g. another
+    # docker-compose stack), "host.docker.internal" resolves to the host IP.
+    # Set crcon.url = "http://host.docker.internal:<port>" in config.toml.
+    # On Linux (where host.docker.internal is not automatic) this mapping adds it:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Increase these if you track many servers or see OOM kills / lag.
+    mem_limit: 2g
+    cpus: 2.0
+    mem_reservation: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

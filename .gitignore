@@ -1,0 +1,35 @@
+# Configuration (keep example, ignore actual)
+config.toml*
+
+# Logs
+logs/
+*.log
+
+# Binaries
+hll-radar
+hll-radar.exe
+
+# Go build artifacts
+*.out
+*.test
+
+# IDE files
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+CLAUDE.md
+.CLAUDE
+.vscode
+.Trashes
+ehthumbs.db
+Thumbs.db

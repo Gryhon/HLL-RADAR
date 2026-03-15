@@ -1,0 +1,45 @@
+.login-required {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background-color: #1a1a1a;
+  color: #ffffff;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.login-required-card {
+  text-align: center;
+  padding: 3rem;
+  background-color: #2d2d2d;
+  border: 1px solid #404040;
+  border-radius: 8px;
+  max-width: 480px;
+}
+
+.login-required-card h1 {
+  margin: 0 0 1rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.login-required-card p {
+  margin: 0 0 2rem;
+  color: #b0b0b0;
+  line-height: 1.5;
+}
+
+.login-required-retry {
+  padding: 0.6rem 2rem;
+  background-color: #4a7c59;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.login-required-retry:hover {
+  background-color: #5a9c6a;
+}

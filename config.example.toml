@@ -1,0 +1,75 @@
+##############################
+#### Global configuration ####
+##############################
+[global]
+log_level = "info"
+log_file = true
+
+##############################
+#### RCON Servers ####
+##############################
+[[servers]]
+name = "server1"
+display_name = "Server 1"
+host = "your-hll-server.com"
+port = 7779
+password = "your-rcon-password"
+enabled = true
+
+# Add additional servers by copying the [[servers]] block:
+# [[servers]]
+# name = "server2"
+# display_name = "Server 2"
+# host = "your-second-server.com"
+# port = 7779
+# password = "your-second-rcon-password"
+# enabled = true
+
+##############################
+#### Database configuration ####
+##############################
+# For production (Docker): set host to "postgres" (the docker-compose service name)
+# For local development: set host to "localhost"
+# The user/password/dbname must match the postgres environment in docker-compose.yml
+[database]
+host = "postgres"
+port = 5432
+user = "hll_user"
+password = "hll_password"
+dbname = "hll_radar"
+sslmode = "disable"
+
+##############################
+### Player Tracker config ###
+##############################
+[tracker]
+enabled = true
+log_level = "info"
+check_interval_seconds = 5 # How often to track player positions
+
+##############################
+### Web Server configuration ###
+##############################
+[webserver]
+enabled = true
+port = 8080
+log_level = "info"
+# Allowed CORS origins. Use ["*"] to allow all origins (default, suitable for development).
+# In production, restrict to your frontend domain(s):
+# cors_origins = ["https://your-domain.com", "https://admin.your-domain.com"]
+cors_origins = ["*"]
+# Enable the strong point editor API (allows tweaking SP positions on map via POST)
+sp_editor = false
+
+##############################
+### CRCON Authentication ###
+##############################
+# Authenticate users via an existing CRCON (Community RCON) session.
+# When enabled, users must be logged into CRCON first; HLL RADAR validates
+# the sessionid cookie against CRCON's /api/is_logged_in endpoint.
+[crcon]
+enabled = false
+# For Docker: use "http://host.docker.internal:<port>" to reach CRCON on the host.
+# For local dev: use "http://localhost:<port>".
+url = "http://host.docker.internal:8010"
+cache_ttl_seconds = 60
