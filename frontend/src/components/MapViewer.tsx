@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, memo, useMemo, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, memo, useMemo, useCallback } from "react";
 import type {
   PlayerPosition,
   KillEvent,
@@ -8,7 +8,7 @@ import type {
 } from "../types";
 import { getMapConfig, getDefaultStrongPoints } from "../config/maps";
 import { apiClient } from "../services/api";
-import { getTeamClass, getSquadColor } from "../utils";
+import { getTeamClass, getSquadColor, SQUAD_NAMES } from "../utils";
 import "./MapViewer.css";
 
 interface PlayerDotProps {
@@ -29,6 +29,11 @@ interface PlayerDotProps {
   onMessagePlayer?: (playerName: string) => void;
   onPunishPlayer?: (playerName: string) => void;
   onKickPlayer?: (playerName: string) => void;
+  onTrailPlayer?: (playerName: string) => void;
+  isTrailed?: boolean;
+  trailWindowMinutes?: number;
+  onTrailWindowChange?: (minutes: number) => void;
+  snapSerial?: number;
 }
 
 const PlayerDot: React.FC<PlayerDotProps> = memo(
@@ -50,9 +55,15 @@ const PlayerDot: React.FC<PlayerDotProps> = memo(
     onMessagePlayer,
     onPunishPlayer,
     onKickPlayer,
+    onTrailPlayer,
+    isTrailed,
+    trailWindowMinutes,
+    onTrailWindowChange,
+    snapSerial,
   }) => {
     const dotRef = useRef<HTMLDivElement>(null);
     const prevPosRef = useRef<{ x: number; y: number } | null>(null);
+    const prevSnapRef = useRef(snapSerial ?? 0);
 
     const isDeadOrRedeploying = player.x === 0 && player.y === 0;
 
@@ -66,28 +77,42 @@ const PlayerDot: React.FC<PlayerDotProps> = memo(
         ? ((player.y - minY) / (maxY - minY)) * mapHeight
         : mapHeight / 2;
 
-    // Detect large position jumps (respawn/teleport) and disable transition
-    // so the player dot appears at the new position instantly
-    useEffect(() => {
-      if (isDeadOrRedeploying) return;
-      const prev = prevPosRef.current;
-      if (prev && dotRef.current) {
-        const dx = x - prev.x;
-        const dy = y - prev.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        // If pixel distance > 15% of map size, it's a respawn — skip transition
-        const threshold = Math.max(mapWidth, mapHeight) * 0.15;
-        if (dist > threshold) {
-          const el = dotRef.current;
-          el.style.transition = "none";
-          // Force reflow so the browser applies the position without transition
-          el.offsetHeight; // eslint-disable-line @typescript-eslint/no-unused-expressions
-          // Re-enable transition on next frame
-          requestAnimationFrame(() => {
-            el.style.transition = "";
-          });
+    // In live-following: disable CSS position transition on snap or large jump (respawn).
+    // useLayoutEffect fires before browser paint so the transition is suppressed before it starts.
+    // In replay/live-scrub: JS interpolation in MapViewer drives positions — nothing to do here.
+    useLayoutEffect(() => {
+      const isSnap = (snapSerial ?? 0) !== prevSnapRef.current;
+      prevSnapRef.current = snapSerial ?? 0;
+
+      if (isDeadOrRedeploying) {
+        prevPosRef.current = null;
+        return;
+      }
+
+      // Only act in live-following mode; other modes use JS interpolation (no CSS left/top)
+      if (!isLive || timelineValue > 0 || isTrailed) {
+        prevPosRef.current = { x, y };
+        return;
+      }
+
+      const el = dotRef.current;
+      let shouldInstant = isSnap;
+      if (!shouldInstant) {
+        const prev = prevPosRef.current;
+        if (prev) {
+          const dx = x - prev.x;
+          const dy = y - prev.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > Math.max(mapWidth, mapHeight) * 0.15) shouldInstant = true;
         }
       }
+
+      if (shouldInstant && el) {
+        el.style.transition = "none";
+        el.offsetHeight; // eslint-disable-line @typescript-eslint/no-unused-expressions
+        requestAnimationFrame(() => { el.style.transition = ""; });
+      }
+
       prevPosRef.current = { x, y };
     });
 
@@ -141,6 +166,9 @@ const PlayerDot: React.FC<PlayerDotProps> = memo(
       })`,
       borderColor: squadColor,
       "--icon-scale": (iconScale * Math.sqrt(zoom)) / zoom,
+      // Trail + replay + live-scrub: JS drives position — no left/top CSS transition.
+      // Live-following (isLive && timelineValue===0): CSS class handles 5.5s position transition.
+      ...((isTrailed || !isLive || timelineValue > 0) && { transition: "transform 0.2s ease, opacity 0.3s ease" }),
     } as React.CSSProperties;
 
     // Get role icon path
@@ -277,6 +305,48 @@ const PlayerDot: React.FC<PlayerDotProps> = memo(
                   </svg>
                 </button>
               )}
+              {onTrailPlayer && (
+                <button
+                  className={`player-action-btn player-action-trail${isTrailed ? " active" : ""}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onTrailPlayer(player.player_name);
+                  }}
+                  title={isTrailed ? "Hide trail" : "Show trail"}
+                >
+                  <svg
+                    width="10"
+                    height="8"
+                    viewBox="0 0 32 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeDasharray="3 2"
+                  >
+                    <path d="M0 8 C4 0, 8 0, 12 8 C16 16, 20 16, 24 8 C28 0, 32 0, 36 8" />
+                  </svg>
+                </button>
+              )}
+              {isTrailed && onTrailWindowChange && (
+                <select
+                  className="trail-window-select"
+                  value={trailWindowMinutes}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => {
+                    e.stopPropagation();
+                    onTrailWindowChange(Number(e.target.value));
+                  }}
+                >
+                  <option value={3}>3 min</option>
+                  <option value={6}>6 min</option>
+                  <option value={9}>9 min</option>
+                  <option value={12}>12 min</option>
+                  <option value={30}>30 min</option>
+                  <option value={0}>All</option>
+                </select>
+              )}
             </div>
           </div>
         </div>
@@ -284,6 +354,24 @@ const PlayerDot: React.FC<PlayerDotProps> = memo(
     );
   }
 );
+
+// Smooth SVG path through points using Catmull-Rom splines
+function catmullRomPath(pts: { px: number; py: number }[]): string {
+  if (pts.length < 2) return "";
+  let d = `M ${pts[0].px.toFixed(1)},${pts[0].py.toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(pts.length - 1, i + 2)];
+    const cp1x = p1.px + (p2.px - p0.px) / 6;
+    const cp1y = p1.py + (p2.py - p0.py) / 6;
+    const cp2x = p2.px - (p3.px - p1.px) / 6;
+    const cp2y = p2.py - (p3.py - p1.py) / 6;
+    d += ` C ${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2.px.toFixed(1)},${p2.py.toFixed(1)}`;
+  }
+  return d;
+}
 
 // SpawnMarker component for rendering spawn positions
 const SpawnMarker: React.FC<{
@@ -443,6 +531,8 @@ interface MapViewerProps {
   serverId?: number;
   matchId?: number;
   forceShowStrongPoints?: boolean;
+  playbackSpeed?: number;
+  snapSerial?: number;  // increments on manual scrub / skip / go-live
 }
 
 export const MapViewer = ({
@@ -458,6 +548,8 @@ export const MapViewer = ({
   serverId,
   matchId,
   forceShowStrongPoints = false,
+  playbackSpeed = 1,
+  snapSerial = 0,
 }: MapViewerProps) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -482,6 +574,13 @@ export const MapViewer = ({
   });
   const [showAllies, setShowAllies] = useState(true);
   const [showAxis, setShowAxis] = useState(true);
+  const [trailedPlayerNames, setTrailedPlayerNames] = useState<Set<string>>(new Set());
+  const [trailDataMap, setTrailDataMap] = useState<Map<string, PlayerPosition[]>>(new Map());
+  const [trailWindowMap, setTrailWindowMap] = useState<Map<string, number>>(new Map());
+  const [squadsAlliesOpen, setSquadsAlliesOpen] = useState(false);
+  const [squadsAxisOpen, setSquadsAxisOpen] = useState(false);
+  const [strongPointsOpen, setStrongPointsOpen] = useState(false);
+  const [hiddenUnits, setHiddenUnits] = useState<Set<string>>(new Set());
   const [showPlayerNames, setShowPlayerNames] = useState(true);
   const [showSpawnsState, setShowSpawnsState] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
@@ -630,6 +729,32 @@ export const MapViewer = ({
     setConfirmAction({ type: "kick", playerName });
   }, []);
 
+  // Toggle player trail
+  const handleTrailPlayer = useCallback(async (playerName: string) => {
+    if (trailedPlayerNames.has(playerName)) {
+      setTrailedPlayerNames(prev => { const next = new Set(prev); next.delete(playerName); return next; });
+      setTrailDataMap(prev => { const next = new Map(prev); next.delete(playerName); return next; });
+      liveAnimRefs.current.delete(playerName);
+      return;
+    }
+    setTrailedPlayerNames(prev => new Set([...prev, playerName]));
+    try {
+      const data = await apiClient.getPlayerHistory(playerName, matchId, serverId);
+      setTrailDataMap(prev => new Map([...prev, [playerName, data]]));
+    } catch (e) {
+      console.error("Failed to fetch player trail:", e);
+    }
+  }, [trailedPlayerNames, matchId, serverId]);
+
+  // When matchId changes (new match started), reset all trail state
+  useEffect(() => {
+    setTrailedPlayerNames(new Set());
+    setTrailDataMap(new Map());
+    setTrailWindowMap(new Map());
+    liveAnimRefs.current.clear();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchId]);
+
   // Execute confirmed action
   const handleConfirmAction = useCallback(async () => {
     if (!confirmAction || !serverId) return;
@@ -657,17 +782,377 @@ export const MapViewer = ({
     return { x: Math.round(gx), y: Math.round(gy) };
   };
 
-  // Filter players based on team visibility (memoized for performance)
-  const visiblePlayers = useMemo(() => {
-    if (!players || !Array.isArray(players)) {
-      return [];
+  // Compute available squads per team (sorted) and whether any commander exists per team
+  const availableSquads = useMemo(() => {
+    if (!players || !Array.isArray(players)) return {
+      allies: { units: [] as string[], hasCommander: false },
+      axis: { units: [] as string[], hasCommander: false },
+    };
+    const alliesSet = new Set<string>();
+    const axisSet = new Set<string>();
+    let alliesCommander = false;
+    let axisCommander = false;
+    for (const p of players) {
+      const team = p.team?.toLowerCase();
+      const isCommander = p.role?.toLowerCase() === "armycommander";
+      if (team === "allies") {
+        if (isCommander) alliesCommander = true;
+        else if (p.unit) alliesSet.add(p.unit.toLowerCase().trim());
+      } else if (team === "axis") {
+        if (isCommander) axisCommander = true;
+        else if (p.unit) axisSet.add(p.unit.toLowerCase().trim());
+      }
     }
-    return players.filter((player) => {
-      if (player.team.toLowerCase() === "allies" && !showAllies) return false;
-      if (player.team.toLowerCase() === "axis" && !showAxis) return false;
-      return true;
+    const sortUnits = (set: Set<string>) => {
+      const known = SQUAD_NAMES.filter((n) => set.has(n));
+      const unknown = [...set].filter((n) => !SQUAD_NAMES.includes(n)).sort();
+      return [...known, ...unknown];
+    };
+    return {
+      allies: { units: sortUnits(alliesSet), hasCommander: alliesCommander },
+      axis: { units: sortUnits(axisSet), hasCommander: axisCommander },
+    };
+  }, [players]);
+
+  // Trail data sorted once by timestamp, per player
+  const sortedTrailDataMap = useMemo(() => {
+    const m = new Map<string, PlayerPosition[]>();
+    for (const [name, data] of trailDataMap) {
+      m.set(name, [...data].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()));
+    }
+    return m;
+  }, [trailDataMap]);
+
+  // Track when timelineValue last updated for interpolation.
+  // snapSerial invalidates the ref so the next render uses exact baseMs (no lerp).
+  const lastTimelineRef = useRef<{ gameTimeMs: number; realTime: number } | null>(null);
+  useEffect(() => {
+    if (!matchStartTime) return;
+    lastTimelineRef.current = {
+      gameTimeMs: new Date(matchStartTime).getTime() + timelineValue * 1000,
+      realTime: performance.now(),
+    };
+  }, [timelineValue, matchStartTime]);
+
+  // On manual scrub / skip / go-live: clear all interpolation refs for instant snap.
+  const skipNextLiveAnimUpdateRef = useRef(false);
+  useEffect(() => {
+    if (snapSerial === 0) return;
+    lastTimelineRef.current = null;
+    liveAnimRefs.current.clear();
+    playerInterpRef.current = null;
+    skipNextLiveAnimUpdateRef.current = true;
+  }, [snapSerial]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // For live mode: per-player animation refs (Map), same 5.5s lerp as CSS transition.
+  type LiveAnimState = { fromX: number; fromY: number; fromTs: number; toX: number; toY: number; toTs: number; startTime: number };
+  const liveAnimRefs = useRef<Map<string, LiveAnimState>>(new Map());
+
+  // Live positions for all trailed players
+  const liveTrailedPlayers = useMemo(() => {
+    if (!isLive || timelineValue !== 0 || trailedPlayerNames.size === 0) return new Map<string, PlayerPosition>();
+    const m = new Map<string, PlayerPosition>();
+    for (const name of trailedPlayerNames) {
+      const p = players?.find(p => p.player_name === name);
+      if (p) m.set(name, p);
+    }
+    return m;
+  }, [isLive, timelineValue, players, trailedPlayerNames]);
+
+  // Append new live positions to trailDataMap as they arrive
+  useEffect(() => {
+    if (liveTrailedPlayers.size === 0) return;
+    setTrailDataMap(prev => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [name, pos] of liveTrailedPlayers) {
+        if (pos.x === 0 && pos.y === 0) continue;
+        const existing = next.get(name) ?? [];
+        if (existing.length > 0 && existing[existing.length - 1].timestamp === pos.timestamp) continue;
+        next.set(name, [...existing, pos]);
+        changed = true;
+      }
+      return changed ? next : prev;
     });
-  }, [players, showAllies, showAxis]);
+  }, [liveTrailedPlayers]);
+
+  // Update liveAnimRefs for each live trailed player
+  useEffect(() => {
+    if (!isLive || timelineValue !== 0) return;
+    if (skipNextLiveAnimUpdateRef.current) {
+      skipNextLiveAnimUpdateRef.current = false;
+      liveAnimRefs.current.clear();
+      return;
+    }
+    const now = performance.now();
+    for (const [name, pos] of liveTrailedPlayers) {
+      if (pos.x === 0 || pos.y === 0) continue;
+      const toTs = new Date(pos.timestamp).getTime();
+      const cur = liveAnimRefs.current.get(name) ?? null;
+      if (!cur) {
+        liveAnimRefs.current.set(name, { fromX: pos.x, fromY: pos.y, fromTs: toTs, toX: pos.x, toY: pos.y, toTs, startTime: now });
+        continue;
+      }
+      const progress = Math.min(1, (now - cur.startTime) / 5500);
+      liveAnimRefs.current.set(name, {
+        fromX: cur.fromX + (cur.toX - cur.fromX) * progress,
+        fromY: cur.fromY + (cur.toY - cur.fromY) * progress,
+        fromTs: cur.fromTs + (cur.toTs - cur.fromTs) * progress,
+        toX: pos.x, toY: pos.y, toTs,
+        startTime: now,
+      });
+    }
+  }, [isLive, liveTrailedPlayers]);
+
+  // JS interpolation refs for all players (replay + live-scrub)
+  const playerInterpRef = useRef<{
+    from: Map<string, { x: number; y: number }>;
+    startTime: number;
+  } | null>(null);
+  const prevPlayersRef = useRef<PlayerPosition[]>([]);
+  const lastHandledSnapRef = useRef(0);
+
+  // When players change: set up interpolation (skip in live-following and on snap)
+  useEffect(() => {
+    const newPlayers = players || [];
+    const prev = prevPlayersRef.current;
+    prevPlayersRef.current = newPlayers;
+
+    // Live-following: CSS class handles it, JS not needed
+    if (isLive && timelineValue === 0) {
+      playerInterpRef.current = null;
+      lastHandledSnapRef.current = snapSerial;
+      return;
+    }
+
+    // Snap: instant jump, no interpolation
+    if (snapSerial !== lastHandledSnapRef.current) {
+      lastHandledSnapRef.current = snapSerial;
+      playerInterpRef.current = null;
+      return;
+    }
+
+    if (prev.length === 0 || newPlayers.length === 0) {
+      playerInterpRef.current = null;
+      return;
+    }
+
+    const now = performance.now();
+    const fromMap = new Map<string, { x: number; y: number }>();
+
+    if (playerInterpRef.current) {
+      // Mid-animation: capture current interpolated position as new "from"
+      const t = Math.min(1, (now - playerInterpRef.current.startTime) / 1000);
+      for (const p of prev) {
+        const fromPos = playerInterpRef.current.from.get(p.player_name);
+        fromMap.set(p.player_name, fromPos
+          ? { x: fromPos.x + (p.x - fromPos.x) * t, y: fromPos.y + (p.y - fromPos.y) * t }
+          : { x: p.x, y: p.y }
+        );
+      }
+    } else {
+      for (const p of prev) {
+        fromMap.set(p.player_name, { x: p.x, y: p.y });
+      }
+    }
+
+    playerInterpRef.current = { from: fromMap, startTime: now };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [players, isLive, timelineValue, snapSerial]);
+
+  // RAF loop — always runs at 60fps to drive smooth JS interpolation for all players and trail
+  const [rafTick, setRafTick] = useState(0);
+  const trailRafRef = useRef<number | null>(null);
+  useEffect(() => {
+    const tick = () => {
+      setRafTick(n => n + 1);
+      trailRafRef.current = requestAnimationFrame(tick);
+    };
+    trailRafRef.current = requestAnimationFrame(tick);
+    return () => { if (trailRafRef.current) { cancelAnimationFrame(trailRafRef.current); trailRafRef.current = null; } };
+  }, []);
+
+  // Smooth interpolated positions for all trailed players (drives icons and trail endpoints).
+  // Live: 5.5s lerp matching the CSS transition timing.
+  // Replay: playbackSpeed-based time interpolation between recorded positions.
+  const trailedPlayersInterpolated = useMemo(() => {
+    const result = new Map<string, PlayerPosition | null>();
+    if (trailedPlayerNames.size === 0) return result;
+
+    const baseMs = matchStartTime ? new Date(matchStartTime).getTime() + timelineValue * 1000 : 0;
+    let interpMs = baseMs;
+    if (lastTimelineRef.current) {
+      const elapsed = performance.now() - lastTimelineRef.current.realTime;
+      if (elapsed <= 1500) interpMs = lastTimelineRef.current.gameTimeMs + elapsed * playbackSpeed;
+    }
+
+    for (const name of trailedPlayerNames) {
+      const fallback = players?.find((p) => p.player_name === name) ?? null;
+      const sortedData = sortedTrailDataMap.get(name) ?? [];
+
+      if (sortedData.length === 0) { result.set(name, fallback); continue; }
+
+      // --- Live following ---
+      if (isLive && timelineValue === 0) {
+        const anim = liveAnimRefs.current.get(name) ?? null;
+        if (!anim || !fallback) { result.set(name, fallback); continue; }
+        const progress = Math.min(1, (performance.now() - anim.startTime) / 5500);
+        if (progress >= 1) { result.set(name, fallback); continue; }
+        result.set(name, {
+          ...fallback,
+          x: anim.fromX + (anim.toX - anim.fromX) * progress,
+          y: anim.fromY + (anim.toY - anim.fromY) * progress,
+          timestamp: new Date(anim.fromTs + (anim.toTs - anim.fromTs) * progress).toISOString(),
+        });
+        continue;
+      }
+
+      // --- Replay / scrubbing ---
+      if (!matchStartTime) { result.set(name, fallback); continue; }
+
+      let prevPos: PlayerPosition | null = null;
+      let nextPos: PlayerPosition | null = null;
+      for (const p of sortedData) {
+        const ts = new Date(p.timestamp).getTime();
+        if (ts <= interpMs) prevPos = p;
+        else { nextPos = p; break; }
+      }
+
+      if (!prevPos || prevPos.x === 0 || prevPos.y === 0) { result.set(name, fallback); continue; }
+      if (!nextPos || nextPos.x === 0 || nextPos.y === 0) { result.set(name, prevPos); continue; }
+
+      const prevTs = new Date(prevPos.timestamp).getTime();
+      const nextTs = new Date(nextPos.timestamp).getTime();
+      const t = Math.max(0, Math.min(1, (interpMs - prevTs) / (nextTs - prevTs)));
+
+      if (mapConfig && mapRenderDetails.width > 0) {
+        const { minX, maxX, minY, maxY } = mapConfig.bounds;
+        const w = mapRenderDetails.width, h = mapRenderDetails.height;
+        const dx = ((nextPos.x - prevPos.x) / (maxX - minX)) * w;
+        const dy = ((nextPos.y - prevPos.y) / (maxY - minY)) * h;
+        if (Math.sqrt(dx * dx + dy * dy) > Math.max(w, h) * 0.15) { result.set(name, prevPos); continue; }
+      }
+
+      result.set(name, {
+        ...prevPos,
+        x: prevPos.x + (nextPos.x - prevPos.x) * t,
+        y: prevPos.y + (nextPos.y - prevPos.y) * t,
+        timestamp: new Date(interpMs).toISOString(),
+      });
+    }
+    return result;
+  // rafTick drives 60fps re-evaluation; eslint can't see the ref reads
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rafTick, trailedPlayerNames, sortedTrailDataMap, isLive, matchStartTime, timelineValue, playbackSpeed, players, mapConfig, mapRenderDetails]);
+
+  // Filter players and apply smooth JS interpolation for all players in replay/live-scrub.
+  // Live-following uses CSS class transitions (unchanged). Trailed player uses its own interp.
+  const visiblePlayers = useMemo(() => {
+    if (!players || !Array.isArray(players)) return [];
+
+    const interp = playerInterpRef.current; // read ref (rafTick keeps this fresh)
+    const now = performance.now();
+    const isLiveFollowing = isLive && timelineValue === 0;
+
+    return players
+      .filter((player) => {
+        const team = player.team.toLowerCase();
+        if (team === "allies" && !showAllies) return false;
+        if (team === "axis" && !showAxis) return false;
+        if (hiddenUnits.size > 0) {
+          const isCommander = player.role?.toLowerCase() === "armycommander";
+          if (isCommander && hiddenUnits.has(`__commander_${team}__`)) return false;
+          if (!isCommander && player.unit && hiddenUnits.has(`${team}__${player.unit.toLowerCase().trim()}`)) return false;
+        }
+        return true;
+      })
+      .map((player) => {
+        // JS interpolation for non-live-following, non-trailed players
+        if (!isLiveFollowing && interp && !trailedPlayerNames.has(player.player_name)
+            && player.x !== 0 && player.y !== 0) {
+          const t = Math.min(1, (now - interp.startTime) / 1000);
+          if (t < 1) {
+            const fromPos = interp.from.get(player.player_name);
+            if (fromPos && fromPos.x !== 0 && fromPos.y !== 0) {
+              // Skip large jumps (respawn across map)
+              const noMapConfig = !mapConfig || mapRenderDetails.width === 0;
+              const tooFar = !noMapConfig && (() => {
+                const { minX, maxX, minY, maxY } = mapConfig!.bounds;
+                const w = mapRenderDetails.width, h = mapRenderDetails.height;
+                const dx = ((player.x - fromPos.x) / (maxX - minX)) * w;
+                const dy = ((player.y - fromPos.y) / (maxY - minY)) * h;
+                return Math.sqrt(dx * dx + dy * dy) > Math.max(w, h) * 0.15;
+              })();
+              if (!tooFar) {
+                return { ...player, x: fromPos.x + (player.x - fromPos.x) * t, y: fromPos.y + (player.y - fromPos.y) * t };
+              }
+            }
+          }
+        }
+
+        // Override trailed players with their own RAF-interpolated positions
+        if (trailedPlayerNames.has(player.player_name)) {
+          const interped = trailedPlayersInterpolated.get(player.player_name);
+          if (interped) return { ...player, x: interped.x, y: interped.y };
+        }
+
+        return player;
+      });
+  // rafTick drives 60fps re-evaluation of interp ref reads and performance.now()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rafTick, players, showAllies, showAxis, hiddenUnits, trailedPlayerNames, trailedPlayersInterpolated, isLive, timelineValue, mapConfig, mapRenderDetails]);
+
+  // Compute trail segments per player using the smooth interpolated game time and position
+  const allTrailSegments = useMemo(() => {
+    if (mapRenderDetails.width === 0 || !mapConfig || trailedPlayerNames.size === 0) return [];
+
+    const result: { name: string; segments: { px: number; py: number }[][] }[] = [];
+    const { minX, maxX, minY, maxY } = mapConfig.bounds;
+    const toPixel = (p: { x: number; y: number }) => ({
+      px: ((p.x - minX) / (maxX - minX)) * mapRenderDetails.width,
+      py: ((p.y - minY) / (maxY - minY)) * mapRenderDetails.height,
+    });
+    const threshold = Math.max(mapRenderDetails.width, mapRenderDetails.height) * 0.15;
+
+    for (const name of trailedPlayerNames) {
+      const sortedData = sortedTrailDataMap.get(name) ?? [];
+      const interp = trailedPlayersInterpolated.get(name) ?? null;
+      if (sortedData.length === 0 || !interp || (interp.x === 0 && interp.y === 0)) continue;
+
+      const windowMinutes = trailWindowMap.get(name) ?? 3;
+      const upperMs = new Date(interp.timestamp).getTime();
+      const lowerBoundMs = windowMinutes > 0 ? upperMs - windowMinutes * 60 * 1000 : 0;
+
+      const filtered = sortedData.filter((p) => {
+        const tMs = new Date(p.timestamp).getTime();
+        return tMs <= upperMs && (lowerBoundMs === 0 || tMs >= lowerBoundMs);
+      });
+
+      const segments: { px: number; py: number }[][] = [];
+      let current: { px: number; py: number }[] = [];
+      let prev: { px: number; py: number } | null = null;
+      for (const p of filtered) {
+        if (p.x === 0 && p.y === 0) {
+          if (current.length > 1) segments.push(current);
+          current = []; prev = null; continue;
+        }
+        const pt = toPixel(p);
+        if (prev) {
+          const dx = pt.px - prev.px, dy = pt.py - prev.py;
+          if (Math.sqrt(dx * dx + dy * dy) > threshold) {
+            if (current.length > 1) segments.push(current);
+            current = [];
+          }
+        }
+        current.push(pt);
+        prev = pt;
+      }
+      current.push(toPixel(interp));
+      if (current.length > 1) segments.push(current);
+      if (segments.length > 0) result.push({ name, segments });
+    }
+    return result;
+  }, [sortedTrailDataMap, mapRenderDetails, mapConfig, trailWindowMap, trailedPlayersInterpolated, trailedPlayerNames]);
 
   // Set initial map size and handle window resizing
   useEffect(() => {
@@ -1453,9 +1938,9 @@ export const MapViewer = ({
             }}
           >
             {/* Player Dots */}
-            {visiblePlayers.map((player, index) => (
+            {visiblePlayers.map((player) => (
               <PlayerDot
-                key={`${player.match_id}-${player.player_name}-${player.team}-${index}`}
+                key={`${player.player_name}-${player.team}`}
                 player={player}
                 mapWidth={mapRenderDetails.width}
                 mapHeight={mapRenderDetails.height}
@@ -1477,6 +1962,13 @@ export const MapViewer = ({
                   isLive && serverId ? handlePunishPlayer : undefined
                 }
                 onKickPlayer={isLive && serverId ? handleKickPlayer : undefined}
+                onTrailPlayer={handleTrailPlayer}
+                isTrailed={trailedPlayerNames.has(player.player_name)}
+                trailWindowMinutes={trailWindowMap.get(player.player_name) ?? 3}
+                onTrailWindowChange={(minutes) =>
+                  setTrailWindowMap(prev => new Map([...prev, [player.player_name, minutes]]))
+                }
+                snapSerial={snapSerial}
               />
             ))}
 
@@ -1494,6 +1986,44 @@ export const MapViewer = ({
                   gameToMapCoords={gameToMapCoords}
                 />
               ))}
+          </div>
+        )}
+
+        {/* Player Trail SVG */}
+        {imageLoaded && allTrailSegments.length > 0 && (
+          <div
+            className="zoom-pan-layer"
+            style={{
+              position: "absolute",
+              width: `${mapRenderDetails.width}px`,
+              height: `${mapRenderDetails.height}px`,
+              top: `${mapRenderDetails.offsetY}px`,
+              left: `${mapRenderDetails.offsetX}px`,
+              transform: `scale(${zoom}) translate(${pan.x}px, ${pan.y}px)`,
+              pointerEvents: "none",
+              zIndex: 3,
+            }}
+          >
+            <svg
+              width={mapRenderDetails.width}
+              height={mapRenderDetails.height}
+              style={{ position: "absolute", top: 0, left: 0 }}
+            >
+              {allTrailSegments.flatMap(({ name, segments }) =>
+                segments.map((seg, si) => (
+                  <path
+                    key={`${name}-${si}`}
+                    d={catmullRomPath(seg)}
+                    fill="none"
+                    stroke="#00e5ff"
+                    strokeWidth={2}
+                    strokeDasharray="5 4"
+                    strokeLinecap="round"
+                    opacity={0.85}
+                  />
+                ))
+              )}
+            </svg>
           </div>
         )}
 
@@ -1602,28 +2132,193 @@ export const MapViewer = ({
             <>
               <div className="control-section">
                 <h4>Team Visibility</h4>
-                <label className="control-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={showAllies}
-                    onChange={(e) => setShowAllies(e.target.checked)}
-                  />
-                  <span className="checkbox-label">
-                    <span className="team-indicator allies"></span>
-                    Show Allies
-                  </span>
-                </label>
-                <label className="control-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={showAxis}
-                    onChange={(e) => setShowAxis(e.target.checked)}
-                  />
-                  <span className="checkbox-label">
-                    <span className="team-indicator axis"></span>
-                    Show Axis
-                  </span>
-                </label>
+
+                {/* Allies row + collapsible squad list */}
+                <div className="team-filter-row">
+                  <label className="control-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={showAllies}
+                      onChange={(e) => setShowAllies(e.target.checked)}
+                    />
+                    <span className="checkbox-label">
+                      <span className="team-indicator allies"></span>
+                      Show Allies
+                    </span>
+                  </label>
+                  {(availableSquads.allies.units.length > 0 || availableSquads.allies.hasCommander) && (
+                    <button
+                      className="minimize-button"
+                      onClick={() => setSquadsAlliesOpen((v) => !v)}
+                      title={!showAllies ? "Enable Allies first" : squadsAlliesOpen ? "Collapse" : "Expand"}
+                      disabled={!showAllies}
+                    >
+                      {squadsAlliesOpen ? "▼" : "▲"}
+                    </button>
+                  )}
+                </div>
+                {squadsAlliesOpen && (
+                  <div className={`squad-sub-list${!showAllies ? " squad-sub-list--disabled" : ""}`}>
+                    <div className="sp-toggle-all">
+                      <button
+                        className="sp-toggle-btn"
+                        disabled={!showAllies}
+                        onClick={() => setHiddenUnits((prev) => {
+                          const next = new Set(prev);
+                          availableSquads.allies.units.forEach((u) => next.delete(`allies__${u}`));
+                          next.delete("__commander_allies__");
+                          return next;
+                        })}
+                      >All</button>
+                      <button
+                        className="sp-toggle-btn"
+                        disabled={!showAllies}
+                        onClick={() => setHiddenUnits((prev) => {
+                          const next = new Set(prev);
+                          availableSquads.allies.units.forEach((u) => next.add(`allies__${u}`));
+                          if (availableSquads.allies.hasCommander) next.add("__commander_allies__");
+                          return next;
+                        })}
+                      >None</button>
+                    </div>
+                    {availableSquads.allies.hasCommander && (
+                      <label className="control-checkbox">
+                        <input
+                          type="checkbox"
+                          disabled={!showAllies}
+                          checked={!hiddenUnits.has("__commander_allies__")}
+                          onChange={(e) => {
+                            setHiddenUnits((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.delete("__commander_allies__");
+                              else next.add("__commander_allies__");
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className="checkbox-label">
+                          <span className="squad-color-dot" style={{ backgroundColor: "#FFD700" }} />
+                          Commander
+                        </span>
+                      </label>
+                    )}
+                    {availableSquads.allies.units.map((unit) => (
+                      <label key={unit} className="control-checkbox">
+                        <input
+                          type="checkbox"
+                          disabled={!showAllies}
+                          checked={!hiddenUnits.has(`allies__${unit}`)}
+                          onChange={(e) => {
+                            setHiddenUnits((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.delete(`allies__${unit}`);
+                              else next.add(`allies__${unit}`);
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className="checkbox-label">
+                          <span className="squad-color-dot" style={{ backgroundColor: getSquadColor(unit) }} />
+                          {unit.charAt(0).toUpperCase() + unit.slice(1)}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                {/* Axis row + collapsible squad list */}
+                <div className="team-filter-row">
+                  <label className="control-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={showAxis}
+                      onChange={(e) => setShowAxis(e.target.checked)}
+                    />
+                    <span className="checkbox-label">
+                      <span className="team-indicator axis"></span>
+                      Show Axis
+                    </span>
+                  </label>
+                  {(availableSquads.axis.units.length > 0 || availableSquads.axis.hasCommander) && (
+                    <button
+                      className="minimize-button"
+                      onClick={() => setSquadsAxisOpen((v) => !v)}
+                      title={!showAxis ? "Enable Axis first" : squadsAxisOpen ? "Collapse" : "Expand"}
+                      disabled={!showAxis}
+                    >
+                      {squadsAxisOpen ? "▼" : "▲"}
+                    </button>
+                  )}
+                </div>
+                {squadsAxisOpen && (
+                  <div className={`squad-sub-list${!showAxis ? " squad-sub-list--disabled" : ""}`}>
+                    <div className="sp-toggle-all">
+                      <button
+                        className="sp-toggle-btn"
+                        disabled={!showAxis}
+                        onClick={() => setHiddenUnits((prev) => {
+                          const next = new Set(prev);
+                          availableSquads.axis.units.forEach((u) => next.delete(`axis__${u}`));
+                          next.delete("__commander_axis__");
+                          return next;
+                        })}
+                      >All</button>
+                      <button
+                        className="sp-toggle-btn"
+                        disabled={!showAxis}
+                        onClick={() => setHiddenUnits((prev) => {
+                          const next = new Set(prev);
+                          availableSquads.axis.units.forEach((u) => next.add(`axis__${u}`));
+                          if (availableSquads.axis.hasCommander) next.add("__commander_axis__");
+                          return next;
+                        })}
+                      >None</button>
+                    </div>
+                    {availableSquads.axis.hasCommander && (
+                      <label className="control-checkbox">
+                        <input
+                          type="checkbox"
+                          disabled={!showAxis}
+                          checked={!hiddenUnits.has("__commander_axis__")}
+                          onChange={(e) => {
+                            setHiddenUnits((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.delete("__commander_axis__");
+                              else next.add("__commander_axis__");
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className="checkbox-label">
+                          <span className="squad-color-dot" style={{ backgroundColor: "#FFD700" }} />
+                          Commander
+                        </span>
+                      </label>
+                    )}
+                    {availableSquads.axis.units.map((unit) => (
+                      <label key={unit} className="control-checkbox">
+                        <input
+                          type="checkbox"
+                          disabled={!showAxis}
+                          checked={!hiddenUnits.has(`axis__${unit}`)}
+                          onChange={(e) => {
+                            setHiddenUnits((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.delete(`axis__${unit}`);
+                              else next.add(`axis__${unit}`);
+                              return next;
+                            });
+                          }}
+                        />
+                        <span className="checkbox-label">
+                          <span className="squad-color-dot" style={{ backgroundColor: getSquadColor(unit) }} />
+                          {unit.charAt(0).toUpperCase() + unit.slice(1)}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
                 <label className="control-checkbox">
                   <input
                     type="checkbox"
@@ -1660,12 +2355,23 @@ export const MapViewer = ({
                 )}
               </div>
 
+              <hr className="controls-divider" />
+
               {/* Strong Points toggle */}
               {(forceShowStrongPoints || (useCleanMap && mapConfig.imageUrlClean)) &&
                 strongPoints.length > 0 && (
                   <div className="control-section">
-                    <h4>Strong Points</h4>
-                    <div className="sp-toggle-all">
+                    <div className="control-section-header">
+                      <h4>Strong Points</h4>
+                      <button
+                        className="minimize-button"
+                        onClick={() => setStrongPointsOpen((v) => !v)}
+                        title={strongPointsOpen ? "Collapse" : "Expand"}
+                      >
+                        {strongPointsOpen ? "▼" : "▲"}
+                      </button>
+                    </div>
+                    {strongPointsOpen && <div className="sp-toggle-all">
                       <button
                         className="sp-toggle-btn"
                         onClick={() => setHiddenSPs(new Set())}
@@ -1776,13 +2482,13 @@ export const MapViewer = ({
                           Discard
                         </button>
                       )}
-                    </div>
-                    {forceShowStrongPoints && spUnlocked && (
+                    </div>}
+                    {strongPointsOpen && forceShowStrongPoints && spUnlocked && (
                       <div className="sp-unlock-hint">
                         Drag strong points to reposition.
                       </div>
                     )}
-                    <div className="checkboxes-container sp-list">
+                    {strongPointsOpen && <div className="checkboxes-container sp-list">
                       {strongPoints.map((cp, i) => (
                         <label
                           key={`sp-toggle-${i}`}
@@ -1806,9 +2512,11 @@ export const MapViewer = ({
                           <span className="checkbox-label">{cp.name}</span>
                         </label>
                       ))}
-                    </div>
+                    </div>}
                   </div>
                 )}
+
+              <hr className="controls-divider" />
 
               <div className="sliders-container">
                 <div className="control-section">

@@ -262,6 +262,16 @@ class ApiClient {
     );
   }
 
+  // Get position history for a player — use matchId for replay, serverId for live
+  async getPlayerHistory(playerName: string, matchId?: number, serverId?: number): Promise<PlayerPosition[]> {
+    const params = matchId
+      ? `?match_id=${matchId}`
+      : serverId ? `?server_id=${serverId}` : "";
+    return this.request<PlayerPosition[]>(
+      `/api/v1/player/${encodeURIComponent(playerName)}/history${params}`
+    );
+  }
+
   // Check auth status (whitelisted endpoint — never returns 401)
   async getAuthStatus(): Promise<{
     auth_required: boolean;

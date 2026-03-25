@@ -98,6 +98,9 @@ function App() {
     handleMatchEnd,
   } = useMatchState(selectedServerId);
 
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [snapSerial, setSnapSerial] = useState(0);
+
   // Player position management
   const {
     livePlayerPositions,
@@ -361,6 +364,8 @@ function App() {
                 score={displayScore}
                 serverId={selectedServerId}
                 matchId={currentMatch.id}
+                playbackSpeed={playbackSpeed}
+                snapSerial={snapSerial}
               />
             )}
             {!loading && !currentMatch && <div className="placeholder" />}
@@ -375,6 +380,8 @@ function App() {
               match={currentMatch}
               onGoLive={handleGoLive}
               autoPlay={autoPlay}
+              onSpeedChange={setPlaybackSpeed}
+              onSnap={() => setSnapSerial(n => n + 1)}
             />
           </div>
         </main>

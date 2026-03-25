@@ -413,6 +413,12 @@
   transform: scale(1.05);
 }
 
+.minimize-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .sliders-container {
   display: flex;
   gap: 12px;
@@ -433,6 +439,18 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 2px;
+}
+
+.control-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.controls-divider {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 4px 0;
 }
 
 .control-checkbox {
@@ -480,6 +498,45 @@
 
 .team-indicator.axis {
   background-color: #ef4444;
+}
+
+.squad-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.team-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.squad-expand-btn {
+  background: none;
+  border: none;
+  color: #aaaaaa;
+  cursor: pointer;
+  font-size: 0.65rem;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.squad-expand-btn:hover {
+  color: #ffffff;
+}
+
+.squad-sub-list {
+  padding-left: 1.2rem;
+  margin-bottom: 4px;
+  border-left: 1px solid #404040;
+}
+
+.squad-sub-list--disabled {
+  opacity: 0.35;
+  pointer-events: none;
 }
 
 .zoom-control {
@@ -1045,6 +1102,37 @@
 
 .player-action-kick:hover {
   background: rgba(255, 80, 80, 0.35);
+}
+
+.player-action-trail {
+  background: rgba(250, 204, 21, 0.15);
+  border-color: rgba(250, 204, 21, 0.3);
+  color: #facc15;
+}
+
+.player-action-trail:hover {
+  background: rgba(250, 204, 21, 0.35);
+}
+
+.player-action-trail.active {
+  background: rgba(250, 204, 21, 0.4);
+  border-color: rgba(250, 204, 21, 0.7);
+}
+
+.trail-window-select {
+  background: rgba(250, 204, 21, 0.15);
+  border: 1px solid rgba(250, 204, 21, 0.4);
+  border-radius: 4px;
+  color: #facc15;
+  font-size: 9px;
+  padding: 2px 4px;
+  cursor: pointer;
+  outline: none;
+}
+
+.trail-window-select option {
+  background: #1a1a1a;
+  color: #facc15;
 }
 
 /* Message dialog overlay */

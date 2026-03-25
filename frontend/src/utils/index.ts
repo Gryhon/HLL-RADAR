@@ -120,6 +120,7 @@ const SQUAD_NAMES = [
 ];
 
 // Get squad color based on unit name
+export { SQUAD_NAMES };
 export const getSquadColor = (unit?: string): string => {
   if (!unit) return "#FFFFFF"; // Default white for no squad
 
