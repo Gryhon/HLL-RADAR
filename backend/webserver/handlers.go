@@ -294,33 +294,43 @@ func (ws *WebServer) handlePlayerHistory(w http.ResponseWriter, r *http.Request)
 	vars := mux.Vars(r)
 	playerName := vars["name"]
 
-	serverID, err := parseServerID(r)
-	if err != nil {
-		http.Error(w, "Invalid server_id parameter", http.StatusBadRequest)
-		return
-	}
+	var matchID int64
 
-	// Get the active match for the specified server
-	activeMatch, err := ws.db.GetActiveMatch(ctx, serverID)
-	if err != nil {
-		ws.log.Error("Failed to get active match", "error", err)
-		http.Error(w, "Failed to get active match", http.StatusInternalServerError)
-		return
-	}
-
-	var history []database.PlayerPosition
-	if activeMatch != nil {
-		// Get history from the last hour
-		since := time.Now().Add(-1 * time.Hour)
-
-		history, err = ws.db.GetPlayerHistory(ctx, activeMatch.ID, playerName, since)
+	// If match_id is provided directly, use it (replay mode)
+	if matchIDStr := r.URL.Query().Get("match_id"); matchIDStr != "" {
+		id, err := strconv.ParseInt(matchIDStr, 10, 64)
 		if err != nil {
-			ws.log.Error("Failed to get player history", "error", err, "player", playerName)
-			http.Error(w, "Failed to get player history", http.StatusInternalServerError)
+			http.Error(w, "Invalid match_id parameter", http.StatusBadRequest)
 			return
 		}
+		matchID = id
 	} else {
-		history = []database.PlayerPosition{}
+		// Fall back to active match for the given server (live mode)
+		serverID, err := parseServerID(r)
+		if err != nil {
+			http.Error(w, "Invalid server_id parameter", http.StatusBadRequest)
+			return
+		}
+		activeMatch, err := ws.db.GetActiveMatch(ctx, serverID)
+		if err != nil {
+			ws.log.Error("Failed to get active match", "error", err)
+			http.Error(w, "Failed to get active match", http.StatusInternalServerError)
+			return
+		}
+		if activeMatch == nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]database.PlayerPosition{})
+			return
+		}
+		matchID = activeMatch.ID
+	}
+
+	since := time.Time{} // no lower bound for replay; last hour for live handled by caller
+	history, err := ws.db.GetPlayerHistory(ctx, matchID, playerName, since)
+	if err != nil {
+		ws.log.Error("Failed to get player history", "error", err, "player", playerName)
+		http.Error(w, "Failed to get player history", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

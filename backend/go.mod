@@ -10,7 +10,7 @@ require (
 	github.com/jackc/tern/v2 v2.3.3
 	github.com/lmittmann/tint v1.1.2
 	github.com/spf13/viper v1.21.0
-	github.com/zMoooooritz/go-let-loose v0.7.0
+	github.com/zMoooooritz/go-let-loose v0.7.1
 	golang.org/x/text v0.30.0
 )
 

@@ -12,6 +12,8 @@ interface TimelineProps {
   match?: Match | null;
   onGoLive?: () => void;
   autoPlay?: boolean;
+  onSpeedChange?: (speed: number) => void;
+  onSnap?: () => void;  // fired on manual scrub, skip, or go-live
 }
 
 export const Timeline = ({
@@ -22,6 +24,8 @@ export const Timeline = ({
   match,
   onGoLive,
   autoPlay,
+  onSpeedChange,
+  onSnap,
 }: TimelineProps) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLiveFollowing, setIsLiveFollowing] = useState(true);
@@ -123,13 +127,13 @@ export const Timeline = ({
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!isDraggingRef.current) {
-      // First drag event — remember if we were playing, then pause
       isDraggingRef.current = true;
       wasPlayingRef.current = isPlaying;
       setIsPlaying(false);
     }
     const newValue = parseInt(e.target.value, 10);
     onChange(newValue);
+    onSnap?.();
 
     // If in live view and scrubbing back, stop following live
     if (isLive) {
@@ -148,16 +152,18 @@ export const Timeline = ({
   };
 
   const handleSkipBack = () => {
-    const newValue = Math.max(0, value - 30); // Skip back 30 seconds
+    const newValue = Math.max(0, value - 30);
     onChange(newValue);
+    onSnap?.();
     if (isLive) {
       setIsLiveFollowing(false);
     }
   };
 
   const handleSkipForward = () => {
-    const newValue = Math.min(max, value + 30); // Skip forward 30 seconds
+    const newValue = Math.min(max, value + 30);
     onChange(newValue);
+    onSnap?.();
 
     // If we're at the end in live mode, resume following
     if (isLive && newValue >= max) {
@@ -182,11 +188,13 @@ export const Timeline = ({
     if (onGoLive) {
       onGoLive();
       setIsLiveFollowing(true);
+      onSnap?.();
     }
   };
 
   const handleSpeedChange = (speed: number) => {
     setPlaybackSpeed(speed);
+    onSpeedChange?.(speed);
   };
 
   // In live mode, calculate elapsed time from match start
