@@ -960,13 +960,18 @@ export const MapViewer = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [players, isLive, timelineValue, snapSerial]);
 
-  // RAF loop — always runs at 60fps to drive smooth JS interpolation for all players and trail
+  // RAF loop — runs at ~30fps (every other frame) to drive smooth JS interpolation for all players and trail.
+  // 30fps is sufficient for game position updates (which arrive every 5s) and halves React reconciliation cost.
   const [rafTick, setRafTick] = useState(0);
   const trailRafRef = useRef<number | null>(null);
+  const rafFrameRef = useRef(0);
   useEffect(() => {
     const tick = () => {
-      setRafTick(n => n + 1);
       trailRafRef.current = requestAnimationFrame(tick);
+      rafFrameRef.current++;
+      if (rafFrameRef.current % 2 === 0) {
+        setRafTick(n => n + 1);
+      }
     };
     trailRafRef.current = requestAnimationFrame(tick);
     return () => { if (trailRafRef.current) { cancelAnimationFrame(trailRafRef.current); trailRafRef.current = null; } };
@@ -1366,6 +1371,38 @@ export const MapViewer = ({
     }
   }, [isDraggingControl]);
 
+  // Memoized grid labels — 100 SVG text elements that only change on resize or zoom, not every frame
+  const gridLabelElements = useMemo(() => {
+    const cellW = mapRenderDetails.width / 10;
+    const cellH = mapRenderDetails.height / 10;
+    const fontSize = Math.max(10, cellW * 0.15) / zoom;
+    return Array.from({ length: 10 }, (_, col) =>
+      Array.from({ length: 10 }, (_, row) => {
+        const label = `${String.fromCharCode(65 + col)}${row}`;
+        return (
+          <text
+            key={`gl-${col}-${row}`}
+            x={col * cellW + 4 / zoom}
+            y={row * cellH + fontSize + 2 / zoom}
+            fill="rgba(255,255,255,0.35)"
+            fontSize={fontSize}
+            fontFamily="monospace"
+            fontWeight="bold"
+          >
+            {label}
+          </text>
+        );
+      })
+    );
+  }, [mapRenderDetails.width, mapRenderDetails.height, zoom]);
+
+  // O(1) player lookup map — avoids O(n) Array.find() inside kill event filter
+  const playersByName = useMemo(() => {
+    const m = new Map<string, PlayerPosition>();
+    if (players) for (const p of players) m.set(p.player_name, p);
+    return m;
+  }, [players]);
+
   // Filter kill events based on timeline and killer role
   const visibleKillEvents = useMemo(() => {
     if (!killEvents || !Array.isArray(killEvents)) {
@@ -1401,12 +1438,10 @@ export const MapViewer = ({
       }
 
       // Filter out kill events from players with excluded roles
-      const excludedRoles = ["armor", "armycommander", "tankcommander"];
+      const excludedRoles = ["crewman", "gunner", "armycommander", "tankcommander"];
 
       // Find the killer's current role from player positions
-      const killerPlayer = players?.find(
-        (player) => player.player_name === killEvent.killer_name
-      );
+      const killerPlayer = playersByName.get(killEvent.killer_name);
 
       // If we can't find the killer's role, show the kill line (default to showing)
       if (!killerPlayer || !killerPlayer.role) {
@@ -1423,7 +1458,7 @@ export const MapViewer = ({
     timelineValue,
     matchStartTime,
     deathOverlays?.length,
-    players,
+    playersByName,
     isLive,
   ]);
 
@@ -1460,7 +1495,9 @@ export const MapViewer = ({
 
     // Cluster nearby spawns of the same team to avoid overlapping markers
     // Uses same distance threshold as backend (2000 game units = 20m)
+    // Use squared distance to avoid Math.sqrt() on every comparison
     const CLUSTER_DISTANCE = 2000;
+    const CLUSTER_DISTANCE_SQ = CLUSTER_DISTANCE * CLUSTER_DISTANCE;
     const clustered: SpawnEvent[] = [];
 
     for (const spawn of filtered) {
@@ -1471,7 +1508,7 @@ export const MapViewer = ({
         if (c.position_x == null || c.position_y == null) return false;
         const dx = c.position_x - spawn.position_x!;
         const dy = c.position_y - spawn.position_y!;
-        return Math.sqrt(dx * dx + dy * dy) <= CLUSTER_DISTANCE;
+        return dx * dx + dy * dy <= CLUSTER_DISTANCE_SQ;
       });
 
       if (!existingCluster) {
@@ -1667,28 +1704,8 @@ export const MapViewer = ({
                   />
                 );
               })}
-              {/* Grid labels */}
-              {Array.from({ length: 10 }, (_, col) =>
-                Array.from({ length: 10 }, (_, row) => {
-                  const cellW = mapRenderDetails.width / 10;
-                  const cellH = mapRenderDetails.height / 10;
-                  const label = `${String.fromCharCode(65 + col)}${row}`;
-                  const fontSize = Math.max(10, cellW * 0.15) / zoom;
-                  return (
-                    <text
-                      key={`gl-${col}-${row}`}
-                      x={col * cellW + 4 / zoom}
-                      y={row * cellH + fontSize + 2 / zoom}
-                      fill="rgba(255,255,255,0.35)"
-                      fontSize={fontSize}
-                      fontFamily="monospace"
-                      fontWeight="bold"
-                    >
-                      {label}
-                    </text>
-                  );
-                })
-              )}
+              {/* Grid labels — memoized, only recalculated on resize or zoom */}
+              {gridLabelElements}
             </svg>
           </div>
         )}
